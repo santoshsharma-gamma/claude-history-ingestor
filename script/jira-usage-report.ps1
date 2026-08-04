@@ -551,7 +551,8 @@ foreach ($ticketKey in $TicketList) {
         # a terminal status to already exist.
         $windowEnd = [DateTimeOffset]::UtcNow
         $stillOpen = $true
-        Write-Host "No '$DoneStatus' transition yet - ticket appears still open. Measuring '$InProgressStatus' through now ($windowEnd)."
+        $currentStatus = ($transitions | Select-Object -Last 1).To
+        Write-Host "No '$DoneStatus' transition yet - measuring elapsed time from '$InProgressStatus' through now ($windowEnd). Current status appears to be '$currentStatus' (last known transition), not necessarily '$InProgressStatus' - that name refers to the window's START point only."
     }
 
     try {
@@ -748,6 +749,7 @@ $report | Format-Table -AutoSize -Property `
     @{Label = "PromptsAsked"; Expression = { $_.PromptsAsked } }, `
     @{Label = "Total Tokens"; Expression = { $_.InputTokens + $_.OutputTokens + $_.CacheReadTokens + $_.CacheCreationTokens } }, `
     @{Label = "Total Hrs Actual Work"; Expression = { $_.TotalClaudeHours } }, `
+    @{Label = "Total Cost USD"; Expression = { $_.TotalCostUsd } }, `
     @{Label = "Hrs Saved"; Expression = { $_.HoursSaved } }, `
     @{Label = "Story Point Saved"; Expression = { $_.StoryPointsSaved } } `
     | Out-String -Width 300 | Write-Host
@@ -763,7 +765,6 @@ $report | Format-Table -AutoSize -Property `
 #     ClaudeHoursDuringReview, `
 #     @{Label = "TotalClaudeHours"; Expression = { $_.TotalClaudeHours } }, `
 #     @{Label = "Claude Usage %"; Expression = { $_.TotalUsagePct } }, `
-#     @{Label = "Total Cost USD"; Expression = { $_.TotalCostUsd } }, `
 #     @{Label = "Days Saved"; Expression = { $_.DaysSaved } }, `
 #     @{Label = "Saved %"; Expression = { $_.PctSaved } }, `
 
