@@ -1,0 +1,104 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: claude-history-ingestor
+
+claude:
+  history-path: ${CLAUDE_HISTORY_PATH:${user.home}/.claude/projects}
+  file-pattern: "*.jsonl"
+  watcher:
+    # Periodic fallback re-scan alongside the live file watcher - added
+    # post-Phase-11 after real-world Docker-on-Windows use showed native
+    # file-change notifications can silently stop arriving for a bind
+    # mount, even though the container can read current file contents
+    # fine. See ClaudeHistoryWatcher's Javadoc. Lower this if you want
+    # fresher data at the cost of more frequent directory scans; a
+    # personal-scale history (tens of files) makes this cheap even at
+    # much shorter intervals than the 15s default.
+    poll-interval-ms: 15000
+  offset-store:
+    path: ${CLAUDE_OFFSET_STORE_PATH:${user.home}/.claude-history-ingestor/offsets.properties}
+  parser:
+    chunk-size-bytes: 1048576
+    max-raw-line-length-logged: 2000
+  pricing:
+    # USD per million tokens. Defaults reflect Anthropic's published rates
+    # as of when this was written - verify against
+    # platform.claude.com/docs/en/about-claude/pricing before trusting
+    # cost figures this produces for anything that matters. Notably,
+    # Sonnet 5's $2/$10 rate below is INTRODUCTORY and reverts to the
+    # standard $3/$15 on September 1, 2026 - update this then.
+    default-price:
+      input-per-million: 3.00
+      output-per-million: 15.00
+    models:
+      claude-opus-4-8:
+        input-per-million: 5.00
+        output-per-million: 25.00
+      claude-sonnet-5:
+        input-per-million: 2.00   # introductory through 2026-08-31; then 3.00
+        output-per-million: 10.00 # introductory through 2026-08-31; then 15.00
+      claude-haiku-4-5-20251001:
+        input-per-million: 1.00
+        output-per-million: 5.00
+      claude-fable-5:
+        input-per-million: 10.00
+        output-per-million: 50.00
+      claude-mythos-5:
+        input-per-million: 10.00
+        output-per-million: 50.00
+  story-points:
+    # Expected duration range (in days) per JIRA story point value - a
+    # reference table for comparing against actual measured usage
+    # duration, not something this app derives from Claude Code data on
+    # its own (story points aren't part of that data at all). Adjust to
+    # match your own team's actual estimation calibration; these are
+    # just a starting point.
+    mapping:
+      "1":
+        min-days: 1
+        max-days: 1
+      "2":
+        min-days: 2
+        max-days: 4
+      "3":
+        min-days: 3
+        max-days: 5
+      "5":
+        min-days: 5
+        max-days: 10
+      "8":
+        min-days: 8
+        max-days: 12
+  analytics:
+    # Determines what "today" means for today's-prompts/cost/sessions and
+    # the engineering score. Set to your own zone if "today" should follow
+    # your local day rather than UTC's.
+    timezone: UTC
+    score-weights:
+      per-prompt: 2.0
+      per-distinct-repo: 5.0
+      per-distinct-technology: 3.0
+      error-rate-penalty: 50.0
+
+openobserve:
+  base-url: ${OPENOBSERVE_URL:http://localhost:5080}
+  org: ${OPENOBSERVE_ORG:default}
+  stream: ${OPENOBSERVE_STREAM:claude_code_history}
+  user: ${OPENOBSERVE_USER:}
+  password: ${OPENOBSERVE_PASSWORD:}
+  batch-size: 500
+  flush-interval-ms: 2000
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+
+logging:
+  level:
+    root: INFO
+    com.claude.ingestor: DEBUG

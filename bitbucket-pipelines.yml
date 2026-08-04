@@ -1,0 +1,62 @@
+image:
+  name: docker.nexusrepo.gammatelecom.com/shared/maven:eclipse-temurin-25-maven3.9.1
+  username: $NEXUS_USERNAME
+  password: $NEXUS_PASSWORD
+
+options:
+  docker: true
+  size: 2x
+
+definitions:
+  services:
+    docker:
+      memory: 4096
+  scripts:
+    - &set-docker-tag >-
+      export DOCKER_TAG=$(echo ${BITBUCKET_BRANCH/\//-}-$(echo $BITBUCKET_COMMIT | cut -c1-7) | tr '[:upper:]' '[:lower:]')
+
+  steps:
+    - step: &build-and-test
+        name: Build and Test
+        runs-on:
+          - 'self.hosted'
+          - 'global'
+          - 'linux'
+        services:
+          - docker
+        image:
+          name: docker.nexusrepo.gammatelecom.com/shared/maven:eclipse-temurin-25-maven3.9.1
+          username: $NEXUS_USERNAME
+          password: $NEXUS_PASSWORD
+          email: dragon-developers@gamma.co.uk
+        caches:
+          - maven
+        script:
+          - docker login --username $DOCKER_USERNAME --password $DOCKER_PASSWORD
+          - mvn verify checkstyle:checkstyle pmd:pmd spotbugs:spotbugs org.sonarsource.scanner.maven:sonar-maven-plugin:4.0.0.4121:sonar -D'sonar.projectKey'=gammatelecom_dragon-spring-boot-reference-app -D'sonar.organization'=gamma-labs -D'sonar.host.url'=https://sonarcloud.io -D'sonar.token'=$SONAR_TOKEN
+        artifacts:
+          - target/**
+    - step: &deploy
+        name: Deploy
+        runs-on:
+          - global
+          - self.hosted
+        image: atlassian/pipelines-kubectl
+        script:
+          # Echo the value of BITBUCKET_DEPLOYMENT_ENVIRONMENT to the pipeline logs
+          - echo "${BITBUCKET_DEPLOYMENT_ENVIRONMENT}"
+pipelines:
+  default:
+    - step:
+        <<: *build-and-test
+        name: Build and Test
+  branches:
+    main:
+      - step:
+          <<: *build-and-test
+          name: Build and Test
+      - step:
+          <<: *deploy
+          name: Deploy to Dev
+          deployment: Dev
+          trigger: manual

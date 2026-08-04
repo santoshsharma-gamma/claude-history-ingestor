@@ -1,0 +1,10 @@
+{
+	"$schema": "https://gammagroup.co/schema/security-governance/1.0.0/schema.json",
+	"is_in_service": false,
+	"has_public_interface": false,
+	"processes_personal_data": false,
+	"is_distributed_to_third_parties": false,
+	"has_internal_interface": false,
+	"is_deployed_in_production": false,
+	"is_used_in_automation": false
+}

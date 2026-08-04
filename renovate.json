@@ -1,0 +1,25 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "ignoreDeps": [
+    "mcr.microsoft.com/mssql/server",
+    "com.microsoft.sqlserver:mssql-jdbc"
+  ],
+  "packageRules": [
+    {
+      "description": "Automerge minor updates by branch",
+      "matchCurrentVersion": "!/^0/",
+      "matchUpdateTypes": [
+        "minor",
+        "patch",
+        "pin"
+      ],
+      "automerge": true,
+      "automergeType": "branch"
+    },
+    {
+      "description": "Exclude Red Hat repackaged artifacts",
+      "matchManagers": ["maven"],
+      "allowedVersions": "^(?!.*\\.redhat).*"
+    }
+  ]
+}

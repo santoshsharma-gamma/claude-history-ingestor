@@ -1,0 +1,24 @@
+# Expected duration range (in days) per JIRA story point value.
+# Read by jira-usage-report.ps1's Get-StoryPointMapping function.
+#
+# Note: that parser only understands THIS exact shape (a numeric or
+# quoted-numeric key, each with min-days/max-days children) - it's a
+# small purpose-built parser, not a general YAML parser. Don't add
+# other structures to this file and expect them to work.
+
+story-points:
+  "1":
+    min-days: 1
+    max-days: 1
+  "2":
+    min-days: 2
+    max-days: 4
+  "3":
+    min-days: 3
+    max-days: 5
+  "5":
+    min-days: 5
+    max-days: 10
+  "8":
+    min-days: 8
+    max-days: 12

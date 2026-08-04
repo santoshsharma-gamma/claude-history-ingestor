@@ -1,0 +1,46 @@
+services:
+  openobserve:
+    image: public.ecr.aws/zinclabs/openobserve:latest
+    ports:
+      - "5080:5080"
+    environment:
+      ZO_ROOT_USER_EMAIL: ${OPENOBSERVE_USER:-santosh.sharma@gamma.co.uk}
+      ZO_ROOT_USER_PASSWORD: ${OPENOBSERVE_PASSWORD:-ClaudeCode@2026!}
+      # Default only allows ingesting data up to 5 hours old, which silently drops
+      # this app's historical backfill (Claude Code session history goes back weeks).
+      # 8760h = 1 year, generous enough to cover any realistic backfill.
+      ZO_INGEST_ALLOWED_UPTO: "8760"
+    volumes:
+      - openobserve-data:/data
+    restart: unless-stopped
+
+  claude-history-ingestor:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    depends_on:
+      - openobserve
+    ports:
+      - "8080:8080"
+    environment:
+      CLAUDE_HISTORY_PATH: /claude-history
+      CLAUDE_OFFSET_STORE_PATH: /data/offsets.properties
+      OPENOBSERVE_URL: http://openobserve:5080
+      OPENOBSERVE_ORG: default
+      OPENOBSERVE_STREAM: claude_code_history
+      OPENOBSERVE_USER: ${OPENOBSERVE_USER:-santosh.sharma@gamma.co.uk}
+      OPENOBSERVE_PASSWORD: ${OPENOBSERVE_PASSWORD:-ClaudeCode@2026!}
+    volumes:
+      # Read-only: this app only ever reads Claude Code's history files,
+      # never writes to them. Must be an absolute path - Docker Compose
+      # does not reliably expand `~` or nested `${HOME}` inside compose
+      # files, so this intentionally fails loudly (rather than silently
+      # mounting an empty path) if CLAUDE_HISTORY_SOURCE isn't set. Copy
+      # .env.example to .env and set it there.
+      - ${CLAUDE_HISTORY_SOURCE:?Set CLAUDE_HISTORY_SOURCE in a .env file to the absolute path of your Claude Code history directory - see .env.example}:/claude-history:ro
+      - ingestor-data:/data
+    restart: unless-stopped
+
+volumes:
+  openobserve-data:
+  ingestor-data:
