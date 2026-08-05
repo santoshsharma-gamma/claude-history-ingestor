@@ -19,7 +19,7 @@ silently inflated or distorted by data nobody's root-caused yet.
 `llm_cost_usd_micros`, from a period where the actually-running
 application had diverged from what was being worked on here (a
 different Java package entirely - `com.claude.ingestor` vs
-`com.santosh.claude` - the result of manually relocating files by hand
+`com.claude.ingestor` - the result of manually relocating files by hand
 across many updates). That's been reconciled; the real field is
 `llm_cost_usd`.
 

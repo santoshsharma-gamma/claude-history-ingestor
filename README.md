@@ -112,7 +112,7 @@ directly under the root (no subdirectory) fall back to project `_root`.
 ### Manually verifying Phase 2
 
 There's no REST endpoint for this yet (that's Phase 9), so verify via the
-console — `com.santosh.claude` already logs at `DEBUG`:
+console — `com.claude.ingestor` already logs at `DEBUG`:
 
 ```bash
 # in one terminal
@@ -436,10 +436,10 @@ get escaped correctly in the output.
 ### A real bug caught while wiring this phase in
 
 While adding `@EnableScheduling` to `ClaudeHistoryApplication`, I noticed
-`@ConfigurationPropertiesScan("com.santosh.claude.config")` only scans
+`@ConfigurationPropertiesScan("com.claude.ingestor.config")` only scans
 that one package — but `OffsetStoreProperties` (Phase 3) lives in
-`com.santosh.claude.offset` and `ParserProperties` (Phase 4) lives in
-`com.santosh.claude.parser`. Neither is a sub-package of `.config`, so
+`com.claude.ingestor.offset` and `ParserProperties` (Phase 4) lives in
+`com.claude.ingestor.parser`. Neither is a sub-package of `.config`, so
 **neither has actually been registered as a Spring bean since the phase
 it was introduced.** The app would have failed at startup with
 `NoSuchBeanDefinitionException` the moment either was actually needed —
@@ -448,7 +448,7 @@ boot the Spring context, only compilation.
 
 Fixed by widening the scan to `@ConfigurationPropertiesScan` with no
 argument, which defaults to the annotated class's own package
-(`com.santosh.claude`) and covers every sub-package recursively. If
+(`com.claude.ingestor`) and covers every sub-package recursively. If
 Phases 3-5 seemed to work when you ran them manually, it's worth
 double-checking now that it wasn't silently failing in a way you hadn't
 hit yet — see the manual verification steps below, which now double as

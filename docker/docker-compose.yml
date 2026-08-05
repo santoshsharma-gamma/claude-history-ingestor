@@ -4,7 +4,7 @@ services:
     ports:
       - "5080:5080"
     environment:
-      ZO_ROOT_USER_EMAIL: ${OPENOBSERVE_USER:-santosh.sharma@gamma.co.uk}
+      ZO_ROOT_USER_EMAIL: ${OPENOBSERVE_USER:-someone@gamma.co.uk}
       ZO_ROOT_USER_PASSWORD: ${OPENOBSERVE_PASSWORD:-ClaudeCode@2026!}
       # Default only allows ingesting data up to 5 hours old, which silently drops
       # this app's historical backfill (Claude Code session history goes back weeks).
@@ -28,7 +28,7 @@ services:
       OPENOBSERVE_URL: http://openobserve:5080
       OPENOBSERVE_ORG: default
       OPENOBSERVE_STREAM: claude_code_history
-      OPENOBSERVE_USER: ${OPENOBSERVE_USER:-santosh.sharma@gamma.co.uk}
+      OPENOBSERVE_USER: ${OPENOBSERVE_USER:-someone@gamma.co.uk}
       OPENOBSERVE_PASSWORD: ${OPENOBSERVE_PASSWORD:-ClaudeCode@2026!}
     volumes:
       # Read-only: this app only ever reads Claude Code's history files,

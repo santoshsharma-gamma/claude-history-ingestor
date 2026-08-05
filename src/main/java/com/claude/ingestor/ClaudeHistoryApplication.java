@@ -14,12 +14,12 @@ import org.springframework.scheduling.annotation.EnableScheduling;
  * top of this skeleton.
  */
 @SpringBootApplication
-// Scans the whole com.santosh.claude tree (this class's own package),
+// Scans the whole com.claude.ingestor tree (this class's own package),
 // not just .config - @ConfigurationProperties classes also live in
 // .offset (OffsetStoreProperties) and .parser (ParserProperties), and a
 // narrower scan would leave those unregistered as beans. (This was in
 // fact a real bug through Phases 3-5: the scan was previously scoped to
-// "com.santosh.claude.config" only, which is why it's called out here
+// "com.claude.ingestor.config" only, which is why it's called out here
 // explicitly rather than just silently fixed.)
 @ConfigurationPropertiesScan
 @EnableScheduling // added in Phase 6, for OpenObserveBatchingListener's periodic flush

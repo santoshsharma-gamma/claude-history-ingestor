@@ -7,7 +7,7 @@
         </encoder>
     </appender>
 
-    <logger name="com.santosh.claude" level="DEBUG"/>
+    <logger name="com.claude.ingestor" level="DEBUG"/>
 
     <root level="INFO">
         <appender-ref ref="CONSOLE"/>
