@@ -9,7 +9,7 @@
 story-points:
   "1":
     min-days: 1
-    max-days: 1
+    max-days: 2
   "2":
     min-days: 2
     max-days: 4
