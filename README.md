@@ -847,7 +847,6 @@ level of "does the container even start." Please run it and report back
 before trusting it:
 
 ```bash
-cp .env.example .env
 # edit .env: set CLAUDE_HISTORY_SOURCE to your real path
 docker compose up --build
 ```

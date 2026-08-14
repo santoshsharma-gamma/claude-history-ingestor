@@ -1,5 +1,5 @@
 # Expected duration range (in days) per JIRA story point value.
-# Read by jira-usage-report.ps1's Get-StoryPointMapping function.
+# Read by claude-report.ps1's Get-StoryPointMapping function.
 #
 # Note: that parser only understands THIS exact shape (a numeric or
 # quoted-numeric key, each with min-days/max-days children) - it's a

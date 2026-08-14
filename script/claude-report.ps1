@@ -34,7 +34,7 @@
 
 .PARAMETER OutputCsv
     Where to write the combined report. Defaults to
-    jira-usage-report.csv in the current directory. Written even for a
+    claude-report.csv in the current directory. Written even for a
     single ticket, so every run leaves a record behind.
 
 .NOTES ON THE OverlapPct / InProgressOverlapPct / ClaudeHours COLUMNS
@@ -104,6 +104,34 @@
     not bounded by another status transition, since there's nothing
     further to bound it by.
 
+.NOTES ON TotalTokensAllPhases
+    A single ticket-wide total (main In-Progress-to-Closed window,
+    summed across every repo it touched, PLUS pre-review + during-review
+    + post-closure) - shown IDENTICALLY on every repo row, exactly like
+    TotalClaudeHours/TotalCostUsd already do. Deliberately NOT a
+    per-repo figure (an earlier version added the full ticket-wide
+    review-phase total onto each repo's own slice separately, which
+    silently multiplied that portion once per repo if anyone summed the
+    column across a ticket's rows) - summing this column across a
+    ticket's repo rows will overcount; read it once per ticket, not once
+    per repo.
+
+    Console shows this broken down by type too (Input/Output/
+    CacheRead/CacheCreate, all M/B-formatted via Format-BigNumber for
+    readability - the CSV always keeps the full unrounded number
+    regardless). CacheRead usually dominates the total by a wide margin
+    on any session that's run long - every turn in an agentic session
+    re-sees the entire accumulated context, and a cache hit means that
+    got re-read cheaply rather than reprocessed from scratch. This is
+    exactly why a Total Tokens figure in the tens/hundreds of millions
+    can still cost relatively little: CacheRead is billed at 0.1x normal
+    input rate. TotalCostUsd already accounts for all four types at
+    their correct differing rates (input, output, CacheRead at 0.1x,
+    CacheCreate at 1.25x - the latter costs slightly more than a normal
+    input token, since it's doing extra work to store it for reuse) - a
+    bare Total Tokens number alone will look alarming relative to actual
+    cost if CacheRead dominates it, which is normal, not a bug.
+
 .NOTES ON DaysSaved / PctSaved
     IMPORTANT: this does NOT factor in Claude usage hours at all - it's
     purely elapsed CALENDAR time ("In Progress" to "Under Review")
@@ -137,6 +165,10 @@
 
     HoursSaved = DaysSaved * HoursPerDay (default 8) - a plain unit
     conversion, nothing more. Same sign as DaysSaved - can be negative.
+    The one-line ticket summary's "finished in X hrs" (CompletionHours)
+    uses this SAME HoursPerDay basis, deliberately - not real calendar
+    hours (24/day) - so the two figures in that sentence stay directly
+    comparable rather than silently mismatched units.
 
     StoryPointsSaved is NOT just DaysSaved relabeled - it's
     DaysSaved * (StoryPoints / ExpectedMinDays), which only reduces to
@@ -156,16 +188,16 @@
     $env:OPENOBSERVE_PASSWORD = "your-real-password"
 
     # Then every run is just this:
-    .\jira-usage-report.ps1 -Ticket GGLOBDRA-1813
+    .\claude-report.ps1 -Ticket GGLOBDRA-1813
 
 .EXAMPLE
     # A batch, from a file, into a named report (still just needs -Tickets/-TicketsFile
     # once the environment variables above are set)
-    .\jira-usage-report.ps1 -TicketsFile .\tickets.txt -OutputCsv .\q3-report.csv
+    .\claude-report.ps1 -TicketsFile .\tickets.txt -OutputCsv .\q3-report.csv
 
 .EXAMPLE
     # Overriding a value just for one run still works normally
-    .\jira-usage-report.ps1 -Ticket GGLOBDRA-1813 -OpenObserveUrl "http://otherhost:5080"
+    .\claude-report.ps1 -Ticket GGLOBDRA-1813 -OpenObserveUrl "http://otherhost:5080"
 
 .NOTES
     Credentials are parameters/environment variables, never hardcoded -
@@ -193,7 +225,7 @@ param(
     [string]$StoryPointMappingPath = ".\story-points.yaml",
     [double]$HoursPerDay = 8,
 
-    [string]$OutputCsv = ".\jira-usage-report.csv"
+    [string]$OutputCsv = ".\claude-report.csv"
 )
 
 # Deliberately NOT [Parameter(Mandatory = $true)] on the credentials above -
@@ -241,6 +273,22 @@ $jiraHeaders = @{ Authorization = "Basic $jiraBase64" }
 $ooPair    = "$OpenObserveUser`:$OpenObservePassword"
 $ooBase64  = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes($ooPair))
 $ooHeaders = @{ Authorization = "Basic $ooBase64"; "Content-Type" = "application/json" }
+
+function Format-BigNumber {
+    # Formats a plain number as K/M/B for readability in the console
+    # table only - the CSV always keeps the raw, unrounded number, so
+    # nothing precise is ever lost to this formatting.
+    param([double]$Value)
+    if ($Value -ge 1000000000) {
+        return "$([Math]::Round($Value / 1000000000, 2))B"
+    } elseif ($Value -ge 1000000) {
+        return "$([Math]::Round($Value / 1000000, 2))M"
+    } elseif ($Value -ge 1000) {
+        return "$([Math]::Round($Value / 1000, 1))K"
+    } else {
+        return "$Value"
+    }
+}
 
 function Get-SafeSum {
     # Measure-Object -Property throws (a non-terminating error, so
@@ -478,8 +526,9 @@ function New-ReportRow {
           $ClaudeHours = 0, $CostUsd = "", $LifecycleHours = 0, $OverlapPct = "", $InProgressHours = 0, $InProgressOverlapPct = "",
           $ReviewAt = "", $PreReviewHours = "", $ClaudeHoursBeforeReview = "", $PctUsedBeforeReview = "",
           $DuringReviewHours = "", $ClaudeHoursDuringReview = "", $PostClosureHours = "", $ClaudeHoursPostClosure = "", $CostPostClosure = "", $TotalClaudeHours = "", $TotalUsagePct = "", $TotalCostUsd = "", $TotalTokensAllPhases = 0,
+          $TotalInputTokens = 0, $TotalOutputTokens = 0, $TotalCacheReadTokens = 0, $TotalCacheCreationTokens = 0,
           $StoryPoints = "", $ExpectedMinDays = "", $ExpectedMaxDays = "", $ActualDays = "", $Verdict = "",
-          $PreReviewDays = "", $DaysSaved = "", $PctSaved = "", $HoursSaved = "", $StoryPointsSaved = "", $SavedBasis = "", $Note = "")
+          $PreReviewDays = "", $DaysSaved = "", $PctSaved = "", $HoursSaved = "", $StoryPointsSaved = "", $SavedBasis = "", $CompletionHours = "", $Note = "")
     return [PSCustomObject]@{
         Ticket                  = $TicketKey
         Repo                    = $Repo
@@ -508,6 +557,10 @@ function New-ReportRow {
         ClaudeHoursPostClosure  = $ClaudeHoursPostClosure
         CostPostClosure         = $CostPostClosure
         TotalTokensAllPhases    = $TotalTokensAllPhases
+        TotalInputTokens        = $TotalInputTokens
+        TotalOutputTokens       = $TotalOutputTokens
+        TotalCacheReadTokens    = $TotalCacheReadTokens
+        TotalCacheCreationTokens = $TotalCacheCreationTokens
         TotalClaudeHours        = $TotalClaudeHours
         TotalUsagePct           = $TotalUsagePct
         TotalCostUsd            = $TotalCostUsd
@@ -521,6 +574,7 @@ function New-ReportRow {
         HoursSaved              = $HoursSaved
         StoryPointsSaved        = $StoryPointsSaved
         SavedBasis              = $SavedBasis
+        CompletionHours         = $CompletionHours
         Note                    = $Note
     }
 }
@@ -726,8 +780,6 @@ foreach ($ticketKey in $TicketList) {
     # show 0 total tokens despite having real recorded usage.
     $tokensReviewPhases = $tokensBeforeReview + $tokensDuringReview + $tokensPostClosure
 
-
-
     # --- Story points -> expected day RANGE (from story-points.yaml) -> verdict ---
     # See the .NOTES ON StoryPoints section above before trusting this.
     #
@@ -799,6 +851,7 @@ foreach ($ticketKey in $TicketList) {
     $storyPointsSaved = ""
     $savedBasis = ""
     $completionDaysUsed = ""
+    $completionHours = ""
     if ($preReviewDays -ne "") {
         $completionDaysUsed = $preReviewDays
         $savedBasis = "review"
@@ -806,12 +859,30 @@ foreach ($ticketKey in $TicketList) {
         $completionDaysUsed = $actualDays
         $savedBasis = "full-lifecycle (no '$ReviewStatus' transition found)"
     }
+    if ($completionDaysUsed -ne "") {
+        # Same basis as DaysSaved below (review-to-date if that transition
+        # exists, else full lifecycle) - kept as its own field so the
+        # one-line ticket summary can state "finished in X hrs" using
+        # exactly the same number DaysSaved/HoursSaved were computed
+        # against.
+        #
+        # Uses $HoursPerDay here, NOT a hardcoded 24 - an earlier version
+        # used 24 (real calendar hours), while HoursSaved below already
+        # used $HoursPerDay (default 8, a workday-equivalent conversion).
+        # That meant "finished in X hrs" and "saving Y hrs" were silently
+        # on two different hour-per-day bases in the same sentence, even
+        # though they read as directly comparable. Using $HoursPerDay for
+        # both makes the whole sentence internally consistent: expected
+        # (ExpectedMinDays * HoursPerDay) minus actual (this field) always
+        # equals HoursSaved exactly, with no unit mismatch.
+        $completionHours = [Math]::Round($completionDaysUsed * $HoursPerDay, 2)
+    }
     if ($completionDaysUsed -ne "" -and $expectedMinDays -ne "") {
         # No longer clamped to 0 when the estimate wasn't beaten - a
         # negative value here is deliberate and informative (e.g. -6.14
         # days means it took 6.14 days LONGER than the fastest-case
         # estimate), not an error. Hiding overruns as a flat 0 obscured
-        # exactly how far over a ticket like this one actually went.
+        # exactly how far over a bad estimate a ticket actually went.
         $daysSaved = [Math]::Round($expectedMinDays - $completionDaysUsed, 2)
         $pctSaved = [Math]::Round(($daysSaved / $expectedMinDays) * 100, 1)
 
@@ -830,6 +901,41 @@ foreach ($ticketKey in $TicketList) {
             $storyPointsSaved = [Math]::Round($daysSaved * ($storyPoints / $expectedMinDays), 2)
         }
     }
+
+    # Single, clean ticket-wide token total - main window tokens SUMMED
+    # ACROSS EVERY REPO the ticket touched (not per-repo), plus the
+    # pre-review/during-review/post-closure phases computed above. Shown
+    # IDENTICALLY on every repo row further below, exactly like
+    # TotalClaudeHours/TotalCostUsd already do - see the .NOTES ON
+    # TotalTokensAllPhases section above for why a per-repo version of
+    # this was wrong.
+    #
+    # Also breaks this down by type (input/output/cache_read/cache_creation)
+    # - see the .NOTES ON Token breakdown section above for why this
+    # matters: cache_read_tokens usually dominates the total by a wide
+    # margin, but is priced at 0.1x normal input rate, so a bare total
+    # token count alone can look alarmingly large relative to actual cost.
+    $mainWindowTokens = 0
+    $totalInputTokens = 0
+    $totalOutputTokens = 0
+    $totalCacheReadTokens = 0
+    $totalCacheCreationTokens = 0
+    foreach ($resultSet in @($result, $preReviewResult, $duringReviewResult, $postClosureResult)) {
+        if ($resultSet -and $resultSet.hits) {
+            foreach ($h in $resultSet.hits) {
+                $totalInputTokens += (Get-SafeSum -Objects @($h) -Property "input_tokens")
+                $totalOutputTokens += (Get-SafeSum -Objects @($h) -Property "output_tokens")
+                $totalCacheReadTokens += (Get-SafeSum -Objects @($h) -Property "cache_read_tokens")
+                $totalCacheCreationTokens += (Get-SafeSum -Objects @($h) -Property "cache_creation_tokens")
+            }
+        }
+    }
+    if ($result.hits) {
+        foreach ($h in $result.hits) {
+            $mainWindowTokens += ($h.input_tokens + $h.output_tokens + $h.cache_read_tokens + $h.cache_creation_tokens)
+        }
+    }
+    $totalTokensAllPhases = $mainWindowTokens + $tokensReviewPhases
 
     if ($result.hits.Count -eq 0) {
         $note = if ($stillOpen) { "No usage found (still open, measured through now)" } else { "No usage found in window" }
@@ -853,16 +959,16 @@ foreach ($ticketKey in $TicketList) {
         if ($fallbackRepos.Count -eq 0) {
             $report += New-ReportRow -TicketKey $ticketKey -PromptsAsked $promptsAskedCount -InProgressAt $windowStart -ClosedAt $stillOpenLabel -LifecycleHours $lifecycleHours -InProgressHours $inProgressHours `
                 -ReviewAt $reviewTransition -PreReviewHours $preReviewHours -ClaudeHoursBeforeReview $claudeHoursBeforeReview -PctUsedBeforeReview $pctUsedBeforeReview `
-                -DuringReviewHours $duringReviewHours -ClaudeHoursDuringReview $claudeHoursDuringReview -PostClosureHours $postClosureHours -ClaudeHoursPostClosure $claudeHoursPostClosure -CostPostClosure $costPostClosure -TotalClaudeHours $totalClaudeHours -TotalUsagePct $totalUsagePct -TotalCostUsd $totalCostUsd -TotalTokensAllPhases $tokensReviewPhases `
+                -DuringReviewHours $duringReviewHours -ClaudeHoursDuringReview $claudeHoursDuringReview -PostClosureHours $postClosureHours -ClaudeHoursPostClosure $claudeHoursPostClosure -CostPostClosure $costPostClosure -TotalClaudeHours $totalClaudeHours -TotalUsagePct $totalUsagePct -TotalCostUsd $totalCostUsd -TotalTokensAllPhases $totalTokensAllPhases -TotalInputTokens $totalInputTokens -TotalOutputTokens $totalOutputTokens -TotalCacheReadTokens $totalCacheReadTokens -TotalCacheCreationTokens $totalCacheCreationTokens `
                 -StoryPoints $storyPoints -ExpectedMinDays $expectedMinDays -ExpectedMaxDays $expectedMaxDays -ActualDays $actualDays -Verdict $verdict `
-                -PreReviewDays $preReviewDays -DaysSaved $daysSaved -PctSaved $pctSaved -HoursSaved $hoursSaved -StoryPointsSaved $storyPointsSaved -SavedBasis $savedBasis -Note $note
+                -PreReviewDays $preReviewDays -DaysSaved $daysSaved -PctSaved $pctSaved -HoursSaved $hoursSaved -StoryPointsSaved $storyPointsSaved -SavedBasis $savedBasis -CompletionHours $completionHours -Note $note
         } else {
             foreach ($repoName in $fallbackRepos) {
                 $report += New-ReportRow -TicketKey $ticketKey -Repo $repoName -PromptsAsked $promptsAskedCount -InProgressAt $windowStart -ClosedAt $stillOpenLabel -LifecycleHours $lifecycleHours -InProgressHours $inProgressHours `
                     -ReviewAt $reviewTransition -PreReviewHours $preReviewHours -ClaudeHoursBeforeReview $claudeHoursBeforeReview -PctUsedBeforeReview $pctUsedBeforeReview `
-                    -DuringReviewHours $duringReviewHours -ClaudeHoursDuringReview $claudeHoursDuringReview -PostClosureHours $postClosureHours -ClaudeHoursPostClosure $claudeHoursPostClosure -CostPostClosure $costPostClosure -TotalClaudeHours $totalClaudeHours -TotalUsagePct $totalUsagePct -TotalCostUsd $totalCostUsd -TotalTokensAllPhases $tokensReviewPhases `
+                    -DuringReviewHours $duringReviewHours -ClaudeHoursDuringReview $claudeHoursDuringReview -PostClosureHours $postClosureHours -ClaudeHoursPostClosure $claudeHoursPostClosure -CostPostClosure $costPostClosure -TotalClaudeHours $totalClaudeHours -TotalUsagePct $totalUsagePct -TotalCostUsd $totalCostUsd -TotalTokensAllPhases $totalTokensAllPhases -TotalInputTokens $totalInputTokens -TotalOutputTokens $totalOutputTokens -TotalCacheReadTokens $totalCacheReadTokens -TotalCacheCreationTokens $totalCacheCreationTokens `
                     -StoryPoints $storyPoints -ExpectedMinDays $expectedMinDays -ExpectedMaxDays $expectedMaxDays -ActualDays $actualDays -Verdict $verdict `
-                    -PreReviewDays $preReviewDays -DaysSaved $daysSaved -PctSaved $pctSaved -HoursSaved $hoursSaved -StoryPointsSaved $storyPointsSaved -SavedBasis $savedBasis -Note "$note (repo from pre/during-review/post-closure activity, not the main window)"
+                    -PreReviewDays $preReviewDays -DaysSaved $daysSaved -PctSaved $pctSaved -HoursSaved $hoursSaved -StoryPointsSaved $storyPointsSaved -SavedBasis $savedBasis -CompletionHours $completionHours -Note "$note (repo from pre/during-review/post-closure activity, not the main window)"
             }
         }
     } else {
@@ -870,16 +976,15 @@ foreach ($ticketKey in $TicketList) {
         foreach ($hit in $result.hits) {
             $overlapPct           = if ($lifecycleHours -gt 0)    { [Math]::Round(($hit.claude_hours / $lifecycleHours) * 100, 1) }    else { "" }
             $inProgressOverlapPct = if ($inProgressHours -gt 0)   { [Math]::Round(($hit.claude_hours / $inProgressHours) * 100, 1) }   else { "" }
-            $thisRepoTokens = $hit.input_tokens + $hit.output_tokens + $hit.cache_read_tokens + $hit.cache_creation_tokens
             $report += New-ReportRow -TicketKey $ticketKey -Repo $hit.repo_name -PromptsAsked $promptsAskedCount -InProgressAt $windowStart -ClosedAt $stillOpenLabel `
                 -Events $hit.events -InputTokens $hit.input_tokens -OutputTokens $hit.output_tokens `
                 -CacheReadTokens $hit.cache_read_tokens -CacheCreationTokens $hit.cache_creation_tokens `
                 -ClaudeHours $hit.claude_hours -CostUsd $hit.cost_usd -LifecycleHours $lifecycleHours -OverlapPct $overlapPct `
                 -InProgressHours $inProgressHours -InProgressOverlapPct $inProgressOverlapPct `
                 -ReviewAt $reviewTransition -PreReviewHours $preReviewHours -ClaudeHoursBeforeReview $claudeHoursBeforeReview -PctUsedBeforeReview $pctUsedBeforeReview `
-                -DuringReviewHours $duringReviewHours -ClaudeHoursDuringReview $claudeHoursDuringReview -PostClosureHours $postClosureHours -ClaudeHoursPostClosure $claudeHoursPostClosure -CostPostClosure $costPostClosure -TotalClaudeHours $totalClaudeHours -TotalUsagePct $totalUsagePct -TotalCostUsd $totalCostUsd -TotalTokensAllPhases ($thisRepoTokens + $tokensReviewPhases) `
+                -DuringReviewHours $duringReviewHours -ClaudeHoursDuringReview $claudeHoursDuringReview -PostClosureHours $postClosureHours -ClaudeHoursPostClosure $claudeHoursPostClosure -CostPostClosure $costPostClosure -TotalClaudeHours $totalClaudeHours -TotalUsagePct $totalUsagePct -TotalCostUsd $totalCostUsd -TotalTokensAllPhases $totalTokensAllPhases -TotalInputTokens $totalInputTokens -TotalOutputTokens $totalOutputTokens -TotalCacheReadTokens $totalCacheReadTokens -TotalCacheCreationTokens $totalCacheCreationTokens `
                 -StoryPoints $storyPoints -ExpectedMinDays $expectedMinDays -ExpectedMaxDays $expectedMaxDays -ActualDays $actualDays -Verdict $verdict `
-                -PreReviewDays $preReviewDays -DaysSaved $daysSaved -PctSaved $pctSaved -HoursSaved $hoursSaved -StoryPointsSaved $storyPointsSaved -SavedBasis $savedBasis -Note $note
+                -PreReviewDays $preReviewDays -DaysSaved $daysSaved -PctSaved $pctSaved -HoursSaved $hoursSaved -StoryPointsSaved $storyPointsSaved -SavedBasis $savedBasis -CompletionHours $completionHours -Note $note
         }
     }
 }
@@ -889,7 +994,11 @@ $report | Format-Table -AutoSize -Property `
     Ticket, `
     Repo, `
     @{Label = "PromptsAsked"; Expression = { $_.PromptsAsked } }, `
-    @{Label = "Total Tokens"; Expression = { $_.TotalTokensAllPhases } }, `
+    @{Label = "Total Tokens"; Expression = { Format-BigNumber $_.TotalTokensAllPhases } }, `
+    @{Label = "Input"; Expression = { Format-BigNumber $_.TotalInputTokens } }, `
+    @{Label = "Output"; Expression = { Format-BigNumber $_.TotalOutputTokens } }, `
+    @{Label = "CacheRead"; Expression = { Format-BigNumber $_.TotalCacheReadTokens } }, `
+    @{Label = "CacheCreate"; Expression = { Format-BigNumber $_.TotalCacheCreationTokens } }, `
     @{Label = "Total Hrs Actual Work"; Expression = { $_.TotalClaudeHours } }, `
     @{Label = "Total Cost USD"; Expression = { $_.TotalCostUsd } }, `
     @{Label = "Post-Closure Hrs"; Expression = { $_.ClaudeHoursPostClosure } }, `
@@ -898,19 +1007,55 @@ $report | Format-Table -AutoSize -Property `
     @{Label = "Story Point Saved"; Expression = { $_.StoryPointsSaved } } `
     | Out-String -Width 300 | Write-Host
 
+# One plain-English line per ticket, using a group so a multi-repo ticket
+# only prints once (not once per repo row) - StoryPoints/CompletionHours/
+# HoursSaved/StoryPointsSaved are ticket-level values already duplicated
+# identically across every repo row, so the first row per ticket is
+# sufficient. Skipped for a ticket if any of these are missing (e.g. no
+# story points on the ticket, or no completion basis found) rather than
+# printing a sentence with blank gaps in it.
+foreach ($ticketGroup in ($report | Group-Object Ticket)) {
+    $r = $ticketGroup.Group[0]
+    if ($r.StoryPoints -and $r.ExpectedMinDays -ne "" -and $r.ExpectedMaxDays -ne "" -and $r.CompletionHours -ne "" -and $r.HoursSaved -ne "" -and $r.StoryPointsSaved -ne "") {
+        $spDisplay = "{0:F1}" -f [double]$r.StoryPoints
+        # Verb depends on SavedBasis - "finished"/"closed" would be wrong
+        # when the basis is "review" (this only measures time to reach
+        # "Under Review", not actual closure - see .NOTES ON DaysSaved).
+        # "work-hrs" (not just "hrs") makes clear these are a work-hour
+        # equivalent of elapsed calendar time (CompletionDays * HoursPerDay),
+        # not real elapsed hours and not actual Claude usage hours - that's
+        # the separate sentence below.
+        $stage = if ($r.SavedBasis -eq "review") { "reached review" } else { "was fully closed" }
+        Write-Host "$($r.Ticket) with story point $spDisplay ($($r.ExpectedMinDays) - $($r.ExpectedMaxDays) days) $stage in $($r.CompletionHours) work-hrs (vs. a $([double]$r.ExpectedMinDays * $HoursPerDay) work-hr minimum estimate) - saving $($r.HoursSaved) work-hrs, and saving story point $($r.StoryPointsSaved)."
+    }
+
+    # Separate sentence, deliberately - this answers "how much was Claude
+    # actually used", which is a different question from the "saved"
+    # sentence above (that one is purely calendar-time vs. estimate, with
+    # no connection to Claude usage at all - see .NOTES ON DaysSaved).
+    # Skipped if these aren't available (e.g. no "Under Review" transition
+    # found, so TotalClaudeHours/TotalCostUsd were never computed).
+    if ($r.TotalClaudeHours -ne "" -and $r.TotalCostUsd -ne "") {
+        $tokensDisplay = Format-BigNumber $r.TotalTokensAllPhases
+        Write-Host "$($r.Ticket) used Claude for $($r.TotalClaudeHours) hrs, across $($r.PromptsAsked) prompt$(if ($r.PromptsAsked -ne 1) {'s'}), consuming $tokensDisplay tokens, at a cost of `$$($r.TotalCostUsd)."
+    }
+}
+
 # Everything below is commented out, not removed - all of these fields
 # are still computed and written to the CSV regardless of what's shown
 # on screen. Uncomment (and move) any of these back into the -Property
 # list above if you want them visible in the console again:
-#     StoryPoints, `
-#     ActualDays, `
-#     @{Label = "InProgressToReviewDays"; Expression = { $_.PreReviewDays } }, `
-#     @{Label = "input_tokens"; Expression = { $_.InputTokens } }, `
-#     ClaudeHoursDuringReview, `
-#     @{Label = "TotalClaudeHours"; Expression = { $_.TotalClaudeHours } }, `
-#     @{Label = "Claude Usage %"; Expression = { $_.TotalUsagePct } }, `
-#     @{Label = "Days Saved"; Expression = { $_.DaysSaved } }, `
-#     @{Label = "Saved %"; Expression = { $_.PctSaved } }, `
+#     StoryPoints
+#     ActualDays
+#     InProgressToReviewDays (PreReviewDays)
+#     input_tokens (InputTokens)
+#     ClaudeHoursDuringReview
+#     TotalClaudeHours
+#     Claude Usage % (TotalUsagePct)
+#     Days Saved (DaysSaved)
+#     Saved % (PctSaved)
+#     Post-Closure Hrs (ClaudeHoursPostClosure)
+#     Post-Closure Cost (CostPostClosure)
 
 try {
     $report | Export-Csv -Path $OutputCsv -NoTypeInformation

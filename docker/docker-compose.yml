@@ -35,9 +35,8 @@ services:
       # never writes to them. Must be an absolute path - Docker Compose
       # does not reliably expand `~` or nested `${HOME}` inside compose
       # files, so this intentionally fails loudly (rather than silently
-      # mounting an empty path) if CLAUDE_HISTORY_SOURCE isn't set. Copy
-      # .env.example to .env and set it there.
-      - ${CLAUDE_HISTORY_SOURCE:?Set CLAUDE_HISTORY_SOURCE in a .env file to the absolute path of your Claude Code history directory - see .env.example}:/claude-history:ro
+      # mounting an empty path) if CLAUDE_HISTORY_SOURCE isn't set. Set into .env.
+      - ${CLAUDE_HISTORY_SOURCE:?Set CLAUDE_HISTORY_SOURCE in a .env file to the absolute path of your Claude Code history directory}:/claude-history:ro
       - ingestor-data:/data
     restart: unless-stopped
 
