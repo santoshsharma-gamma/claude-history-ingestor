@@ -680,6 +680,16 @@ foreach ($ticketKey in $TicketList) {
     $claudeHoursDuringReview = ""
     $costDuringReview = ""
     $tokensDuringReview = 0
+    # Explicit success flags - set to $true only at the exact moment each
+    # value is genuinely computed, never inferred afterward from the
+    # variable's type or contents. An earlier version tried inferring
+    # "was this computed" from the value itself (first via -ne "", then
+    # via -is [double]) and both were real, hard-to-verify sources of
+    # doubt - this sidesteps that category of bug entirely by tracking
+    # success explicitly, the same way $stillOpen/$reviewTransition
+    # already track other yes/no facts directly rather than inferring them.
+    $beforeReviewComputed = $false
+    $duringReviewComputed = $false
     # Explicitly reset - these are only assigned inside conditional blocks
     # below, and PowerShell's if/foreach don't create new variable scopes,
     # so without this a previous ticket's stale result (in a multi-ticket
@@ -701,6 +711,7 @@ foreach ($ticketKey in $TicketList) {
             if ($preReviewHours -gt 0) {
                 $pctUsedBeforeReview = [Math]::Round(($claudeHoursBeforeReview / $preReviewHours) * 100, 1)
             }
+            $beforeReviewComputed = $true
         } catch {
             Write-Host "$ticketKey`: couldn't compute pre-review usage: $($_.Exception.Message)"
         }
@@ -719,6 +730,7 @@ foreach ($ticketKey in $TicketList) {
                 + (Get-SafeSum -Objects $duringReviewResult.hits -Property "cache_read_tokens") `
                 + (Get-SafeSum -Objects $duringReviewResult.hits -Property "cache_creation_tokens")
             $duringReviewHours = [Math]::Round(($windowEnd - $reviewTransition).TotalHours, 2)
+            $duringReviewComputed = $true
         } catch {
             Write-Host "$ticketKey`: couldn't compute during-review usage: $($_.Exception.Message)"
         }
@@ -828,15 +840,29 @@ foreach ($ticketKey in $TicketList) {
     # --- Time saved: actual completion duration vs. the story point
     # estimate's minimum expected days ---
     # Prefers "In Progress" -> "Under Review" duration (PreReviewDays) when
-    # that transition exists - it's the more precise "time to get real
-    # work done" measure. Falls back to the full lifecycle (ActualDays,
-    # In Progress -> Closed) when a workflow has no distinct "Under
-    # Review" step at all (some projects go straight to Closed) - a
-    # closed ticket with a known story-point estimate still deserves a
-    # saved-time figure, just measured against the whole span instead of
-    # a middle step that doesn't exist in that workflow. Which basis was
-    # used is tracked in $savedBasis so this is never ambiguous in the
-    # CSV.
+    # that transition exists AND it plausibly represents real completion
+    # time. Falls back to the full lifecycle (ActualDays, In Progress to
+    # Closed) in TWO cases: (1) a workflow has no distinct "Under Review"
+    # step at all (some projects go straight to Closed), or (2) the review
+    # transition happened before any real work did - confirmed real
+    # example: a ticket moved to "Under Review" in 18 minutes
+    # (PreReviewHours) with ClaudeHoursBeforeReview = 0, while
+    # ClaudeHoursDuringReview showed 13.4 hours of genuine work - meaning
+    # "time to review" here measured an administrative status flip, not
+    # completion of anything. Which basis was actually used is tracked in
+    # $savedBasis so this is never ambiguous in the CSV - and case (2) is
+    # labeled distinctly from case (1) so it's clear which situation
+    # applied.
+    #
+    # The threshold (ClaudeHoursBeforeReview < 0.1 AND
+    # ClaudeHoursDuringReview > 1) is deliberately narrow - it's meant to
+    # catch the "review happened before real work" case specifically, not
+    # any ticket where before-review usage is merely smaller than
+    # during-review usage (that pattern alone is normal and expected, not
+    # a sign PreReviewDays is unreliable - e.g. a ticket with 2.5 hours
+    # before review and 143 hours during review is NOT this case; only a
+    # near-total absence of before-review usage combined with substantial
+    # during-review usage triggers the fallback).
     #
     # Uses ExpectedMinDays specifically (not the midpoint or max) as a
     # deliberately conservative baseline: if you beat the FASTEST-case
@@ -852,12 +878,35 @@ foreach ($ticketKey in $TicketList) {
     $savedBasis = ""
     $completionDaysUsed = ""
     $completionHours = ""
-    if ($preReviewDays -ne "") {
+
+    # Guards on $reviewTransition existing (a clean truthy check) AND on
+    # both hours values genuinely being doubles (-is [double]), not the ""
+    # placeholder - NOT on comparing them against "" directly. A real bug
+    # in an earlier version: when ClaudeHoursBeforeReview is a genuine 0
+    # (a double, not the "" placeholder), PowerShell's -ne "" comparison
+    # coerces types unpredictably between a number and a string, and
+    # silently evaluated as false - meaning this check never fired for
+    # exactly the real-zero case it was built to catch. -is [double] has
+    # no such ambiguity: it's either genuinely a double, or it isn't.
+    # Uses the explicit $beforeReviewComputed/$duringReviewComputed flags
+    # set above - NOT type or value inference on the numbers themselves.
+    # Two earlier versions of this check both tried to infer "was this
+    # genuinely computed" from the value (first -ne "", then -is [double])
+    # and neither reliably worked in practice. Tracking success explicitly,
+    # at the exact point each computation succeeds, removes that entire
+    # category of doubt.
+    $reviewTooEarlyToBeMeaningful = ($beforeReviewComputed -and $duringReviewComputed -and $claudeHoursBeforeReview -lt 0.1 -and $claudeHoursDuringReview -gt 1)
+
+    if ($preReviewDays -ne "" -and -not $reviewTooEarlyToBeMeaningful) {
         $completionDaysUsed = $preReviewDays
         $savedBasis = "review"
     } elseif ($actualDays -ne "" -and -not $stillOpen) {
         $completionDaysUsed = $actualDays
-        $savedBasis = "full-lifecycle (no '$ReviewStatus' transition found)"
+        if ($reviewTooEarlyToBeMeaningful) {
+            $savedBasis = "full-lifecycle (review transition too early to be meaningful - real work happened during review, not before it)"
+        } else {
+            $savedBasis = "full-lifecycle (no '$ReviewStatus' transition found)"
+        }
     }
     if ($completionDaysUsed -ne "") {
         # Same basis as DaysSaved below (review-to-date if that transition
@@ -1026,7 +1075,20 @@ foreach ($ticketGroup in ($report | Group-Object Ticket)) {
         # not real elapsed hours and not actual Claude usage hours - that's
         # the separate sentence below.
         $stage = if ($r.SavedBasis -eq "review") { "reached review" } else { "was fully closed" }
-        Write-Host "$($r.Ticket) with story point $spDisplay ($($r.ExpectedMinDays) - $($r.ExpectedMaxDays) days) $stage in $($r.CompletionHours) work-hrs (vs. a $([double]$r.ExpectedMinDays * $HoursPerDay) work-hr minimum estimate) - saving $($r.HoursSaved) work-hrs, and saving story point $($r.StoryPointsSaved)."
+
+        # HoursSaved/StoryPointsSaved compare against ExpectedMinDays
+        # specifically (the fastest-case estimate), NOT the whole range -
+        # a ticket can be comfortably "within" its overall estimate
+        # (Verdict) while still showing a negative figure here, simply
+        # because it didn't beat the best-case scenario. Naming Verdict
+        # explicitly, and phrasing this as "beating"/"missing" the
+        # fastest-case baseline rather than always "saving" (which reads
+        # oddly, even misleadingly, for a negative number sitting right
+        # next to "within range") makes that distinction clear rather
+        # than looking like two numbers are contradicting each other.
+        $verdictDisplay = ($r.Verdict -replace " \(still open.*\)", "")
+        $fastestCaseVerb = if ([double]$r.HoursSaved -ge 0) { "beating" } else { "missing" }
+        Write-Host "$($r.Ticket) with story point $spDisplay ($($r.ExpectedMinDays) - $($r.ExpectedMaxDays) days) $stage in $($r.CompletionHours) work-hrs - $verdictDisplay its overall estimate, while $fastestCaseVerb the fastest-case ($($r.ExpectedMinDays)-day / $([double]$r.ExpectedMinDays * $HoursPerDay)-work-hr) baseline by $([Math]::Abs([double]$r.HoursSaved)) work-hrs ($([Math]::Abs([double]$r.StoryPointsSaved)) story points)."
     }
 
     # Separate sentence, deliberately - this answers "how much was Claude
