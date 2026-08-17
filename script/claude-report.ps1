@@ -1088,7 +1088,23 @@ foreach ($ticketGroup in ($report | Group-Object Ticket)) {
         # than looking like two numbers are contradicting each other.
         $verdictDisplay = ($r.Verdict -replace " \(still open.*\)", "")
         $fastestCaseVerb = if ([double]$r.HoursSaved -ge 0) { "beating" } else { "missing" }
-        Write-Host "$($r.Ticket) with story point $spDisplay ($($r.ExpectedMinDays) - $($r.ExpectedMaxDays) days) $stage in $($r.CompletionHours) work-hrs - $verdictDisplay its overall estimate, while $fastestCaseVerb the fastest-case ($($r.ExpectedMinDays)-day / $([double]$r.ExpectedMinDays * $HoursPerDay)-work-hr) baseline by $([Math]::Abs([double]$r.HoursSaved)) work-hrs ($([Math]::Abs([double]$r.StoryPointsSaved)) story points)."
+
+        # Supplementary remark showing the SAME comparison against the
+        # upper bound (ExpectedMaxDays) instead of the lower bound - shown
+        # as an explicit subtraction so it's self-verifying, not just
+        # another unexplained number. NOT the same ratio as
+        # StoryPointsSaved above: that one scales by
+        # (StoryPoints / ExpectedMinDays), which happens to be 1 for the
+        # shipped story-points.yaml (5 points / 5 min-days). Here it's
+        # (StoryPoints / ExpectedMaxDays) instead - for a 5-10 day range,
+        # that's 5/10 = 0.5, genuinely different from the lower-bound
+        # ratio, not a copy-paste of it.
+        $maxWorkHrs = [double]$r.ExpectedMaxDays * $HoursPerDay
+        $upperBoundHoursSaved = [Math]::Round($maxWorkHrs - [double]$r.CompletionHours, 2)
+        $upperBoundStoryPointsSaved = [Math]::Round(($maxWorkHrs - [double]$r.CompletionHours) / $HoursPerDay * ([double]$r.StoryPoints / [double]$r.ExpectedMaxDays), 2)
+        $upperBoundRemark = " (against the upper-bound estimate: $maxWorkHrs - $($r.CompletionHours) = $upperBoundHoursSaved work-hrs / $upperBoundStoryPointsSaved story points still saved)"
+
+        Write-Host "$($r.Ticket) with story point $spDisplay ($($r.ExpectedMinDays) - $($r.ExpectedMaxDays) days) $stage in $($r.CompletionHours) work-hrs - $verdictDisplay its overall estimate, while $fastestCaseVerb the fastest-case ($($r.ExpectedMinDays)-day / $([double]$r.ExpectedMinDays * $HoursPerDay)-work-hr) baseline by $([Math]::Abs([double]$r.HoursSaved)) work-hrs ($([Math]::Abs([double]$r.StoryPointsSaved)) story points)$upperBoundRemark."
     }
 
     # Separate sentence, deliberately - this answers "how much was Claude
