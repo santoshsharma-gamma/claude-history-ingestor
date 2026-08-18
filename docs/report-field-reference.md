@@ -1,4 +1,4 @@
-# jira-usage-report.ps1 — field reference
+# claude-report.ps1 — field reference
 
 What each column in the console report actually measures, and how it's
 calculated. Written for explaining to the team, not just for reference.

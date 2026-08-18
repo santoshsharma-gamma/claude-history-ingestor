@@ -7,7 +7,7 @@
 
 .DESCRIPTION
     Two values (OpenObserve user/password) are needed by both Docker
-    Compose (via .env) and jira-usage-report.ps1 (via $env: variables) -
+    Compose (via .env) and claude-report.ps1 (via $env: variables) -
     those two systems never share config automatically, which is the
     real source of "why do I have to set this up twice" friction. This
     script exists specifically to remove that friction: answer once,
@@ -47,16 +47,16 @@ if (-not $historySource) { $historySource = $defaultHistoryPath }
 # docker-compose bind mounts need forward slashes even on Windows.
 $historySource = $historySource -replace '\\', '/'
 
-# --- 2 & 3. OpenObserve credentials (shared by Docker AND jira-usage-report.ps1) ---
-Write-Host "`n2. OpenObserve login - used by BOTH docker-compose AND jira-usage-report.ps1"
+# --- 2 & 3. OpenObserve credentials (shared by Docker AND claude-report.ps1) ---
+Write-Host "`n2. OpenObserve login - used by BOTH docker-compose AND claude-report.ps1"
 $ooUser = Read-Host "   Username/email [user@gamma.co.uk]"
 if (-not $ooUser) { $ooUser = "user@gamma.co.uk" }
 $ooPasswordSecure = Read-Host "   Password" -AsSecureString
 $ooPassword = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto(
     [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($ooPasswordSecure))
 
-# --- 4, 5, 6. JIRA credentials (jira-usage-report.ps1 only) ---
-Write-Host "`n3. JIRA - used by jira-usage-report.ps1"
+# --- 4, 5, 6. JIRA credentials (claude-report.ps1 only) ---
+Write-Host "`n3. JIRA - used by claude-report.ps1"
 $jiraBase = Read-Host "   Base URL [https://gammatelecom.atlassian.net]"
 if (-not $jiraBase) { $jiraBase = "https://gammatelecom.atlassian.net" }
 $jiraUser = Read-Host "   Your JIRA email [user@gamma.co.uk]"
@@ -107,9 +107,9 @@ if ($existing -and $existing.Contains($beginMarker)) {
 } else {
     Add-Content -Path $PROFILE -Value "`n$block"
 }
-Write-Host "Updated $PROFILE (for jira-usage-report.ps1 - and OpenObserve creds are shared with docker-compose too)"
+Write-Host "Updated $PROFILE (for claude-report.ps1 - and OpenObserve creds are shared with docker-compose too)"
 
 Write-Host "`n=== Done ==="
 Write-Host "Docker: cd to this folder, run 'docker compose up -d'"
 Write-Host "PowerShell: close and reopen your terminal (profile changes need a fresh session), then just run:"
-Write-Host "  .\jira-usage-report.ps1 -Ticket `"YOUR-TICKET`""
+Write-Host "  .\claude-report.ps1 -Ticket `"YOUR-TICKET`""

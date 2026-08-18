@@ -118,7 +118,7 @@ call that's been made for now.
 
 ---
 
-## A dashboard mirroring jira-usage-report.ps1's output
+## A dashboard mirroring claude-report.ps1's output
 
 `PromptsAsked`, `Total Tokens`, `Total Hrs Actual Work`, and `Total Cost
 USD` are all pure OpenObserve data - fully replicable as dashboard

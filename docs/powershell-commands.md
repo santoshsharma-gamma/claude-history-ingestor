@@ -1,5 +1,5 @@
 
-Follow below steps to run ./script/jira-usage-report.ps1:
+Follow below steps to run ./script/claude-report.ps1:
 
 1. Check if you already have a profile file:
    #### `Test-Path $PROFILE`
@@ -19,5 +19,5 @@ Follow below steps to run ./script/jira-usage-report.ps1:
     $env:JIRA_TOKEN = "your-real-jira-token"  -- from: https://id.atlassian.com/manage-profile/security/api-tokens
     $env:OPENOBSERVE_USER = "open-observe.username@gamma.co.uk"
     $env:OPENOBSERVE_PASSWORD = "your-real-openobserve-password"
-4. `Unblock-File -Path .\scripts\jira-usage-report.ps1`
-5. `.\script\jira-usage-report.ps1 -Ticket "GGLOBDRA-1970"`
+4. `Unblock-File -Path .\scripts\claude-report.ps1`
+5. `.\script\claude-report.ps1 -Ticket "GGLOBDRA-1970"`

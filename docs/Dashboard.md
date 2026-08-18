@@ -34,11 +34,11 @@ From the `scripts/` folder:
 
 1. One-time only - unblock the script so Windows stops warning about it:
    ```powershell
-   Unblock-File .\jira-usage-report.ps1
+   Unblock-File .\claude-report.ps1
    ```
 2. Run it - no credentials to type, step 0 already set them:
    ```powershell
-   .\jira-usage-report.ps1 -Ticket "PROJ-123"
+   .\claude-report.ps1 -Ticket "PROJ-123"
    ```
 
 That's it. Full details, every field explained, and troubleshooting all
