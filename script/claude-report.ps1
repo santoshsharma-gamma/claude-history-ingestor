@@ -1053,7 +1053,8 @@ $report | Format-Table -AutoSize -Property `
     @{Label = "Post-Closure Hrs"; Expression = { $_.ClaudeHoursPostClosure } }, `
     @{Label = "Post-Closure Cost"; Expression = { $_.CostPostClosure } }, `
     @{Label = "Hrs Saved"; Expression = { $_.HoursSaved } }, `
-    @{Label = "Story Point Saved"; Expression = { $_.StoryPointsSaved } } `
+    @{Label = "Story Point Saved"; Expression = { $_.StoryPointsSaved } }, `
+    @{Label = "% Saved"; Expression = { $_.PctSaved } } `
     | Out-String -Width 300 | Write-Host
 
 # One plain-English line per ticket, using a group so a multi-repo ticket
@@ -1102,9 +1103,13 @@ foreach ($ticketGroup in ($report | Group-Object Ticket)) {
         $maxWorkHrs = [double]$r.ExpectedMaxDays * $HoursPerDay
         $upperBoundHoursSaved = [Math]::Round($maxWorkHrs - [double]$r.CompletionHours, 2)
         $upperBoundStoryPointsSaved = [Math]::Round(($maxWorkHrs - [double]$r.CompletionHours) / $HoursPerDay * ([double]$r.StoryPoints / [double]$r.ExpectedMaxDays), 2)
-        $upperBoundRemark = " (against the upper-bound estimate: $maxWorkHrs - $($r.CompletionHours) = $upperBoundHoursSaved work-hrs / $upperBoundStoryPointsSaved story points still saved)"
+        # Upper-bound percentage - same idea as the already-existing
+        # PctSaved field (which is against ExpectedMinDays), just against
+        # ExpectedMaxDays instead, matching the upper-bound remark's own basis.
+        $upperBoundPct = [Math]::Round(($upperBoundHoursSaved / $maxWorkHrs) * 100, 1)
+        $upperBoundRemark = " (against the upper-bound estimate: $maxWorkHrs - $($r.CompletionHours) = $upperBoundHoursSaved work-hrs / $upperBoundStoryPointsSaved story points / $upperBoundPct% still saved)"
 
-        Write-Host "$($r.Ticket) with story point $spDisplay ($($r.ExpectedMinDays) - $($r.ExpectedMaxDays) days) $stage in $($r.CompletionHours) work-hrs - $verdictDisplay its overall estimate, while $fastestCaseVerb the fastest-case ($($r.ExpectedMinDays)-day / $([double]$r.ExpectedMinDays * $HoursPerDay)-work-hr) baseline by $([Math]::Abs([double]$r.HoursSaved)) work-hrs ($([Math]::Abs([double]$r.StoryPointsSaved)) story points)$upperBoundRemark."
+        Write-Host "$($r.Ticket) with story point $spDisplay ($($r.ExpectedMinDays) - $($r.ExpectedMaxDays) days) $stage in $($r.CompletionHours) work-hrs - $verdictDisplay its overall estimate, while $fastestCaseVerb the fastest-case ($($r.ExpectedMinDays)-day / $([double]$r.ExpectedMinDays * $HoursPerDay)-work-hr) baseline by $([Math]::Abs([double]$r.HoursSaved)) work-hrs ($([Math]::Abs([double]$r.StoryPointsSaved)) story points / $([Math]::Abs([double]$r.PctSaved))%)$upperBoundRemark."
     }
 
     # Separate sentence, deliberately - this answers "how much was Claude
