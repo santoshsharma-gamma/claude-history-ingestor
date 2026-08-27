@@ -1193,7 +1193,7 @@ foreach ($ticketGroup in ($report | Group-Object Ticket)) {
         # PctSaved field (which is against ExpectedMinDays), just against
         # ExpectedMaxDays instead, matching the upper-bound remark's own basis.
         $upperBoundPct = [Math]::Round(($upperBoundHoursSaved / $maxWorkHrs) * 100, 1)
-        $upperBoundRemark = " (against the upper-bound estimate: $maxWorkHrs - $($r.CompletionHours) = $upperBoundHoursSaved work-hrs / $upperBoundStoryPointsSaved story points / $upperBoundPct% still saved)"
+        $upperBoundRemark = " (against the upper-bound estimate: $maxWorkHrs - $($r.CompletionHours) = $upperBoundHoursSaved work-hrs / $upperBoundStoryPointsSaved story points [scaled at $($r.StoryPoints)pt-per-$($r.ExpectedMaxDays)d, not a plain hrs/8 conversion] / $upperBoundPct% still saved)"
 
         Write-Host "$($r.Ticket) with story point $spDisplay ($($r.ExpectedMinDays) - $($r.ExpectedMaxDays) days) $stage in $($r.CompletionHours) work-hrs - $verdictDisplay its overall estimate, while $fastestCaseVerb the fastest-case ($($r.ExpectedMinDays)-day / $([double]$r.ExpectedMinDays * $HoursPerDay)-work-hr) baseline by $([Math]::Abs([double]$r.HoursSaved)) work-hrs ($([Math]::Abs([double]$r.StoryPointsSaved)) story points / $([Math]::Abs([double]$r.PctSaved))%)$upperBoundRemark."
     }
