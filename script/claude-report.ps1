@@ -72,16 +72,45 @@
     1. The mapping (story-points.yaml) is a reference table you define,
        not something derived from your team's actual history - it's
        only as accurate as the ranges you put in it.
-    2. "Actual days" = LifecycleHours / 24 = raw elapsed calendar time
-       from first "In Progress" to Closed - includes weekends,
-       holidays, and any idle stretches (like GGLOBDRA-1755's week back
-       in "Open"), not just active working time.
+    2. "Actual days" = business days elapsed (Mon-Fri only, Saturday and
+       Sunday excluded entirely) from first "In Progress" to Closed -
+       see .NOTES ON Business-day calculation below for exactly how this
+       works and why it changed from a plain hours/24 calculation.
     3. Attributing a ticket landing "under" its range specifically to
        Claude is an assumption, not a measurement - there's no
        counterfactual (the same ticket completed without Claude) to
        compare against. Best read as "actual vs. your team's own
        estimate range, during a period when Claude was used" rather
        than proven causation.
+
+.NOTES ON Business-day calculation (Get-BusinessDaysElapsed)
+    PreReviewDays and ActualDays used to be a plain (hours / 24)
+    calculation - which counts Saturday and Sunday as full ordinary
+    workdays, same as any weekday. Confirmed wrong on a real ticket:
+    someone started work Friday, was on leave over the weekend, came
+    back Monday and finished Tuesday - the plain-hours calculation
+    counted that weekend as ~2 extra days of "time to complete",
+    inflating CompletionHours/DaysSaved/HoursSaved/Verdict by 16
+    work-hours that were never actually available to work in the first
+    place.
+
+    Get-BusinessDaysElapsed walks day by day between the two
+    timestamps, counting only Monday-Friday - Saturday/Sunday contribute
+    zero, regardless of how much of that calendar day falls inside the
+    window. Partial first/last days are handled proportionally (e.g. a
+    ticket that moved to "In Progress" on a Friday at 3pm only counts
+    the fraction of that Friday from 3pm to midnight, not the whole
+    day) - so this isn't just "count whole calendar dates", it produces
+    the same kind of fractional-day precision the old calculation did,
+    just with weekends correctly excluded.
+
+    This does NOT account for public holidays, or any other kind of
+    planned leave that doesn't have its own distinct JIRA status - if
+    your team wants that level of accuracy, the workflow would need a
+    status like "Blocked"/"On Hold" that gets set during known leave,
+    which this script could then be extended to subtract explicitly.
+    Without that signal, there's no way to distinguish "genuinely
+    working slowly" from "on leave" from raw JIRA timestamps alone.
 
 .NOTES ON TotalClaudeHours / TotalUsagePct / TotalCostUsd
     TotalClaudeHours = ClaudeHoursBeforeReview + ClaudeHoursDuringReview +
@@ -134,7 +163,8 @@
 
 .NOTES ON DaysSaved / PctSaved
     IMPORTANT: this does NOT factor in Claude usage hours at all - it's
-    purely elapsed CALENDAR time ("In Progress" to "Under Review")
+    purely elapsed BUSINESS-DAY time ("In Progress" to "Under Review",
+    weekends excluded - see .NOTES ON Business-day calculation)
     compared against the story-point estimate. It has no connection to
     TotalClaudeHours/TotalUsagePct/ClaudeHoursDuringReview - a ticket
     could show a large Saved% while barely using Claude, or a small one
@@ -288,6 +318,50 @@ function Format-BigNumber {
     } else {
         return "$Value"
     }
+}
+
+function Get-BusinessDaysElapsed {
+    # Walks day by day from Start to End, counting only Monday-Friday -
+    # Saturday/Sunday contribute zero, regardless of how much of that
+    # calendar day falls within the window. Partial first/last days are
+    # handled proportionally, so a ticket that moved to "In Progress" on
+    # a Friday at 3pm only counts the fraction of that Friday from 3pm
+    # to midnight, not the whole day.
+    #
+    # Replaces a plain (hours / 24) calculation that counted weekends in
+    # full, as if they were ordinary workdays - confirmed wrong on a
+    # real ticket where someone worked Friday, was on leave over the
+    # weekend, and returned Monday: the old calculation counted that
+    # weekend as ~2 extra days of "time to complete". See .NOTES ON
+    # Business-day calculation above for the full explanation, including
+    # what this still doesn't account for (public holidays, other leave
+    # without a distinct JIRA status).
+    param([DateTimeOffset]$Start, [DateTimeOffset]$End)
+
+    if ($End -le $Start) { return 0.0 }
+
+    $totalDays = 0.0
+    $current = $Start
+    while ($current -lt $End) {
+        # Deliberately NOT $current.Date - that property returns a plain
+        # DateTime, not a DateTimeOffset, which silently broke every
+        # comparison below it (a real bug caught by an actual run, not
+        # just theory: PowerShell threw "Cannot convert DateTimeOffset to
+        # DateTime" on the -lt comparison, then a null-reference error on
+        # the next loop iteration once the mismatch had already corrupted
+        # $segmentEnd). Constructing the DateTimeOffset explicitly, using
+        # $current's own offset, keeps everything in DateTimeOffset the
+        # whole way through - no implicit type change anywhere.
+        $midnightToday = [DateTimeOffset]::new($current.Year, $current.Month, $current.Day, 0, 0, 0, $current.Offset)
+        $nextMidnight = $midnightToday.AddDays(1)
+        $segmentEnd = if ($nextMidnight -lt $End) { $nextMidnight } else { $End }
+        $fractionOfDay = ($segmentEnd - $current).TotalHours / 24.0
+        if ($current.DayOfWeek -ne [System.DayOfWeek]::Saturday -and $current.DayOfWeek -ne [System.DayOfWeek]::Sunday) {
+            $totalDays += $fractionOfDay
+        }
+        $current = $segmentEnd
+    }
+    return $totalDays
 }
 
 function Get-SafeSum {
@@ -813,7 +887,11 @@ foreach ($ticketKey in $TicketList) {
         try {
             $storyPoints = Get-StoryPoints -TicketKey $ticketKey -FieldId $storyPointsFieldId
             if ($storyPoints) {
-                $actualDays = [Math]::Round($lifecycleHours / 24.0, 2)
+                # Business days elapsed (weekends excluded) from
+                # "In Progress" through the end of the window - see
+                # .NOTES ON Business-day calculation above. Previously
+                # $lifecycleHours / 24.0, which counted weekends in full.
+                $actualDays = [Math]::Round((Get-BusinessDaysElapsed -Start $windowStart -End $windowEnd), 2)
                 $key = Resolve-StoryPointKey -StoryPoints $storyPoints
                 if ($storyPointMapping -and $storyPointMapping.ContainsKey($key)) {
                     $expectedMinDays = $storyPointMapping[$key].MinDays
@@ -870,7 +948,15 @@ foreach ($ticketKey in $TicketList) {
     # could have been anywhere in the range, so this never overstates it.
     # Zero (not negative) if the range wasn't beaten - "saved" doesn't
     # apply when it took as long as, or longer than, even the minimum.
-    $preReviewDays = if ($preReviewHours -ne "") { [Math]::Round($preReviewHours / 24.0, 2) } else { "" }
+    #
+    # PreReviewDays is now business days (weekends excluded), computed
+    # via Get-BusinessDaysElapsed - previously $preReviewHours / 24.0,
+    # which counted weekends in full. See .NOTES ON Business-day
+    # calculation above. This directly fixes the real case that
+    # prompted it: someone working Friday, then Monday/Tuesday after a
+    # weekend on leave, was previously shown as ~4 raw calendar days
+    # instead of the correct ~3 business days.
+    $preReviewDays = if ($reviewTransition) { [Math]::Round((Get-BusinessDaysElapsed -Start $windowStart -End $reviewTransition), 2) } else { "" }
     $daysSaved = ""
     $pctSaved = ""
     $hoursSaved = ""
