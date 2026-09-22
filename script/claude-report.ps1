@@ -83,7 +83,7 @@
        estimate range, during a period when Claude was used" rather
        than proven causation.
 
-.NOTES ON Business-day calculation (Get-BusinessDaysElapsed)
+.NOTES ON Business-day calculation (Get-BusinessDaysElapsed, Get-ActiveBusinessDaysElapsed)
     PreReviewDays and ActualDays used to be a plain (hours / 24)
     calculation - which counts Saturday and Sunday as full ordinary
     workdays, same as any weekday. Confirmed wrong on a real ticket:
@@ -111,6 +111,53 @@
     which this script could then be extended to subtract explicitly.
     Without that signal, there's no way to distinguish "genuinely
     working slowly" from "on leave" from raw JIRA timestamps alone.
+
+    ActualDays/PreReviewDays don't call Get-BusinessDaysElapsed directly
+    any more - they go through Get-ActiveBusinessDaysElapsed, which sums
+    only the stretches actually spent in an active status ($InProgressStatus
+    / $ReviewStatus), running Get-BusinessDaysElapsed over each qualifying
+    stretch. A ticket can bounce back to a non-active status (e.g. "Open")
+    mid-lifecycle and re-enter "In Progress" later (confirmed for real on
+    GGLOBDRA-2013: parked in "Open" for ~12 days between two "In Progress"
+    stretches) - a plain first-transition-to-last-transition span, even
+    with weekends excluded, still counts that parked time as "time to
+    complete". See Get-ActiveBusinessDaysElapsed's own comment for the
+    full story; Get-CumulativeStatusDuration already handled the same
+    bounce-back shape for InProgressHours (see GGLOBDRA-1755 there) but
+    didn't feed ActualDays/CompletionHours/HoursSaved until now.
+
+.NOTES ON assignee-based completion window (Get-CurrentAssigneeSince)
+    Even with Get-ActiveBusinessDaysElapsed excluding non-active stretches
+    (above), GGLOBDRA-2013 still overstated CompletionHours: its early
+    active-status time (a 5-minute "In Progress" blip, then 9 days sitting
+    in "Under Review") happened while the ticket was UNASSIGNED - nobody
+    was actually working it. It was reassigned to its real owner on
+    2026-09-09, who closed it the next day; that ~1-business-day stretch
+    was the genuine work, not the ~8 business days of active-status time
+    the ticket's whole history summed to.
+
+    $completionWindowStart (computed once per ticket, right after
+    $windowEnd) clips the start of the completion-time calculation forward
+    to when the ticket's FINAL assignee (as of $windowEnd) took ownership,
+    via Get-CurrentAssigneeSince - but only if that's later than
+    $windowStart; a ticket assigned before it ever started, or never
+    reassigned, is unaffected. This feeds ActualDays, PreReviewDays,
+    ReviewTransition (and therefore PreReviewHours/ClaudeHoursBeforeReview/
+    ClaudeHoursDuringReview), CompletionHours, HoursSaved, and
+    StoryPointsSaved.
+
+    Deliberately does NOT touch $windowStart itself, InProgressAt,
+    LifecycleHours, or InProgressHours - those stay anchored to the
+    ticket's true first "In Progress" transition, so the full raw history
+    is still visible in the CSV even when the Saved-metrics calculation
+    ignores part of it. SavedBasis is suffixed with the clip explanation
+    whenever it actually changes the completion window used, so this is
+    never silently invisible in the output.
+
+    Only clips at assignee-CHANGE boundaries pulled from the changelog -
+    it has no way to tell "actively working" from "assigned but blocked
+    on something else" within a single assignee's tenure. Same class of
+    blind spot as the business-day/public-holiday one above.
 
 .NOTES ON TotalClaudeHours / TotalUsagePct / TotalCostUsd
     TotalClaudeHours = ClaudeHoursBeforeReview + ClaudeHoursDuringReview +
@@ -214,6 +261,7 @@
     $env:JIRA_BASE = "https://your-domain.atlassian.net"
     $env:JIRA_USER = "you@company.com"
     $env:JIRA_TOKEN = "your-real-token"
+    $env:OPENOBSERVE_URL = "http://localhost:5080"   # or wherever it's reachable on YOUR machine
     $env:OPENOBSERVE_USER = "root@example.com"
     $env:OPENOBSERVE_PASSWORD = "your-real-password"
 
@@ -252,7 +300,21 @@ param(
     [string]$JiraUser = $env:JIRA_USER,
     [string]$JiraToken = $env:JIRA_TOKEN,
 
-    [string]$OpenObserveUrl = "http://localhost:5080",
+    # Not hardcoded to a specific host/IP, and not just "http://localhost:5080"
+    # either - which OpenObserve is actually reachable at depends on how
+    # THIS machine runs the container (Docker Desktop, Podman Desktop,
+    # Podman machine on WSL, etc), and that varies per person/machine, not
+    # per checkout of this script. Podman in particular has been seen NOT
+    # forwarding the published port to Windows "localhost" the way Docker
+    # Desktop does, landing instead on the Podman machine's own VM IP
+    # (`podman machine inspect` shows it, under ConnectionInfo). Falls back
+    # to localhost:5080 (the common case) only if $env:OPENOBSERVE_URL isn't
+    # set - set it once via setEnvironment.ps1 (writes it to $PROFILE,
+    # alongside JIRA_BASE/OPENOBSERVE_USER/OPENOBSERVE_PASSWORD, the same
+    # per-machine values it already manages) rather than editing this
+    # script's default, which would only fix it for you, not for anyone
+    # else who pulls this file.
+    [string]$OpenObserveUrl = $(if ($env:OPENOBSERVE_URL) { $env:OPENOBSERVE_URL } else { "http://localhost:5080" }),
     [string]$OpenObserveOrg = "default",
     [string]$OpenObserveUser = $env:OPENOBSERVE_USER,
     [string]$OpenObservePassword = $env:OPENOBSERVE_PASSWORD,
@@ -438,6 +500,73 @@ function Get-CumulativeStatusDuration {
     return $total
 }
 
+function Get-ActiveBusinessDaysElapsed {
+    # Get-BusinessDaysElapsed alone still overcounts a ticket that bounces
+    # OUT of active work and back to a non-active status (e.g. "Open") mid-
+    # lifecycle, then re-enters "In Progress" later - confirmed on a real
+    # ticket, GGLOBDRA-2013: In Progress -> Under Review -> In Progress ->
+    # Open (parked for ~12 days) -> In Progress -> Under Review -> Closed.
+    # windowStart-to-windowEnd spans that whole parked stretch, so plain
+    # business-day elapsed counted it as "time to complete" and drove
+    # CompletionHours to 129 against a 16-32hr estimate, tanking
+    # HoursSaved/StoryPointsSaved deeply negative even though the ticket
+    # wasn't actually being worked on for most of that gap.
+    #
+    # Get-CumulativeStatusDuration already exists to handle this exact
+    # bounce-back shape (its own comment cites GGLOBDRA-1755), but only
+    # feeds InProgressHours, not ActualDays/PreReviewDays/CompletionHours/
+    # HoursSaved. This applies the same "sum every stretch, not just
+    # first-to-last" fix to those, layered on top of the existing
+    # weekend-exclusion (Get-BusinessDaysElapsed) rather than replacing it:
+    # only time spent in an $ActiveStatuses status, on a weekday, counts.
+    #
+    # Walks every transition, and for each stretch that entered an active
+    # status, clips it to [$Start, $End] and runs Get-BusinessDaysElapsed
+    # over just that clipped stretch - a non-active stretch (e.g. "Open")
+    # contributes nothing, regardless of how many weekdays it spans.
+    param([array]$Transitions, [DateTimeOffset]$Start, [DateTimeOffset]$End, [string[]]$ActiveStatuses, [DateTimeOffset]$Now)
+
+    if ($End -le $Start) { return 0.0 }
+
+    $total = 0.0
+    for ($i = 0; $i -lt $Transitions.Count; $i++) {
+        if ($ActiveStatuses -contains $Transitions[$i].To) {
+            $stretchStart = $Transitions[$i].When
+            $stretchEnd = if ($i + 1 -lt $Transitions.Count) { $Transitions[$i + 1].When } else { $Now }
+            $clipStart = if ($stretchStart -gt $Start) { $stretchStart } else { $Start }
+            $clipEnd = if ($stretchEnd -lt $End) { $stretchEnd } else { $End }
+            if ($clipEnd -gt $clipStart) {
+                $total += (Get-BusinessDaysElapsed -Start $clipStart -End $clipEnd)
+            }
+        }
+    }
+    return $total
+}
+
+function Get-CurrentAssigneeSince {
+    # Returns when the ticket's final assignee (as of $Before) actually
+    # took ownership - the most recent "assignee" change at/before $Before
+    # whose target isn't blank. $null if the ticket was never (re)assigned,
+    # or is unassigned right at $Before (nothing to clip against).
+    #
+    # Exists because active-status time (Get-ActiveBusinessDaysElapsed)
+    # still credits earlier active-status stretches to whoever eventually
+    # closes the ticket, even if those stretches happened while it was
+    # unassigned or assigned to someone else entirely - confirmed on a real
+    # ticket, GGLOBDRA-2013: unassigned for ~3 weeks (a stray 5-minute "In
+    # Progress" blip, then 9 days sitting in "Under Review" with nobody
+    # assigned, then parked back in "Open"), reassigned to its actual
+    # owner on 2026-09-09, who closed it the next day. Real work was ~1
+    # business day, not the ~8 business days of active-status time the
+    # ticket accumulated across its whole, mostly-unassigned history.
+    param([array]$Transitions, [DateTimeOffset]$Before)
+    $relevant = $Transitions | Where-Object { $_.When -le $Before }
+    if (-not $relevant -or ($relevant | Measure-Object).Count -eq 0) { return $null }
+    $last = $relevant | Select-Object -Last 1
+    if (-not $last.To) { return $null }
+    return $last.When
+}
+
 function Get-StoryPointsFieldId {
     # Story Points is a custom field in JIRA - its actual field ID
     # (customfield_XXXXX) varies per JIRA site, so this resolves it by
@@ -526,6 +655,27 @@ function Get-StatusTransitions {
     foreach ($history in $Changelog.values) {
         foreach ($item in $history.items) {
             if ($item.field -eq "status") {
+                $transitions += [PSCustomObject]@{
+                    When = [DateTimeOffset]::Parse($history.created)
+                    From = $item.fromString
+                    To   = $item.toString
+                }
+            }
+        }
+    }
+    return $transitions | Sort-Object When
+}
+
+function Get-AssigneeTransitions {
+    # Same shape as Get-StatusTransitions, filtered to "assignee" field
+    # changes instead of "status" - feeds Get-CurrentAssigneeSince (see its
+    # comment, and .NOTES ON assignee-based completion window, for why this
+    # exists).
+    param($Changelog)
+    $transitions = @()
+    foreach ($history in $Changelog.values) {
+        foreach ($item in $history.items) {
+            if ($item.field -eq "assignee") {
                 $transitions += [PSCustomObject]@{
                     When = [DateTimeOffset]::Parse($history.created)
                     From = $item.fromString
@@ -718,6 +868,7 @@ foreach ($ticketKey in $TicketList) {
     }
 
     $transitions = Get-StatusTransitions -Changelog $changelog
+    $assigneeTransitions = Get-AssigneeTransitions -Changelog $changelog
 
     Write-Host "`n=== $ticketKey - actual prompts asked ==="
     $promptsAskedCount = 0
@@ -761,6 +912,16 @@ foreach ($ticketKey in $TicketList) {
         Write-Host "No '$DoneStatus' transition yet - measuring elapsed time from '$InProgressStatus' through now ($windowEnd). Current status appears to be '$currentStatus' (last known transition), not necessarily '$InProgressStatus' - that name refers to the window's START point only."
     }
 
+    # See .NOTES ON assignee-based completion window / Get-CurrentAssigneeSince.
+    # $windowStart (the ticket's very FIRST "In Progress") stays as-is for
+    # InProgressAt/LifecycleHours/InProgressHours - those are meant to show
+    # the ticket's full raw history. $completionWindowStart is the one
+    # actually used below to compute ActualDays/PreReviewDays/CompletionHours/
+    # HoursSaved/StoryPointsSaved: clipped forward to when the ticket's
+    # final assignee took ownership, if that happened after $windowStart.
+    $ownerSince = Get-CurrentAssigneeSince -Transitions $assigneeTransitions -Before $windowEnd
+    $completionWindowStart = if ($ownerSince -and $ownerSince -gt $windowStart) { $ownerSince } else { $windowStart }
+
     try {
         $result = Get-UsageInWindow -TicketKey $ticketKey -Start $windowStart -End $windowEnd
     } catch {
@@ -783,7 +944,7 @@ foreach ($ticketKey in $TicketList) {
     # all (testing, waiting, other work). Bounded to the FIRST move into
     # $ReviewStatus after $windowStart - if the ticket bounced back out of
     # review and re-entered later, only the first pass is counted here.
-    $reviewTransition = ($transitions | Where-Object { $_.To -eq $ReviewStatus -and $_.When -ge $windowStart } | Select-Object -First 1).When
+    $reviewTransition = ($transitions | Where-Object { $_.To -eq $ReviewStatus -and $_.When -ge $completionWindowStart } | Select-Object -First 1).When
     $preReviewHours = ""
     $claudeHoursBeforeReview = ""
     $costBeforeReview = ""
@@ -812,9 +973,9 @@ foreach ($ticketKey in $TicketList) {
     $duringReviewResult = $null
     $postClosureResult = $null
     if ($reviewTransition) {
-        $preReviewHours = [Math]::Round(($reviewTransition - $windowStart).TotalHours, 2)
+        $preReviewHours = [Math]::Round(($reviewTransition - $completionWindowStart).TotalHours, 2)
         try {
-            $preReviewResult = Get-UsageInWindow -TicketKey $ticketKey -Start $windowStart -End $reviewTransition
+            $preReviewResult = Get-UsageInWindow -TicketKey $ticketKey -Start $completionWindowStart -End $reviewTransition
             $claudeHoursBeforeReview = [Math]::Round((Get-SafeSum -Objects $preReviewResult.hits -Property "claude_hours"), 3)
             $costBeforeReview = [Math]::Round((Get-SafeSum -Objects $preReviewResult.hits -Property "cost_usd"), 2)
             $tokensBeforeReview = (Get-SafeSum -Objects $preReviewResult.hits -Property "input_tokens") `
@@ -927,10 +1088,16 @@ foreach ($ticketKey in $TicketList) {
             $storyPoints = Get-StoryPoints -TicketKey $ticketKey -FieldId $storyPointsFieldId
             if ($storyPoints) {
                 # Business days elapsed (weekends excluded) from
-                # "In Progress" through the end of the window - see
-                # .NOTES ON Business-day calculation above. Previously
-                # $lifecycleHours / 24.0, which counted weekends in full.
-                $actualDays = [Math]::Round((Get-BusinessDaysElapsed -Start $windowStart -End $windowEnd), 2)
+                # "In Progress" through the end of the window, counting
+                # only stretches actually spent in an active status (In
+                # Progress / Under Review) - see .NOTES ON Business-day
+                # calculation above and Get-ActiveBusinessDaysElapsed's own
+                # comment for why a plain first-to-last span still
+                # overcounts a ticket that bounces back to "Open" mid-
+                # lifecycle. Previously $lifecycleHours / 24.0 (counted
+                # weekends in full), then Get-BusinessDaysElapsed alone
+                # (still counted parked/non-active stretches in full).
+                $actualDays = [Math]::Round((Get-ActiveBusinessDaysElapsed -Transitions $transitions -Start $completionWindowStart -End $windowEnd -ActiveStatuses @($InProgressStatus, $ReviewStatus) -Now ([DateTimeOffset]::UtcNow)), 2)
                 $key = Resolve-StoryPointKey -StoryPoints $storyPoints
                 if ($storyPointMapping -and $storyPointMapping.ContainsKey($key)) {
                     $expectedMinDays = $storyPointMapping[$key].MinDays
@@ -995,7 +1162,7 @@ foreach ($ticketKey in $TicketList) {
     # prompted it: someone working Friday, then Monday/Tuesday after a
     # weekend on leave, was previously shown as ~4 raw calendar days
     # instead of the correct ~3 business days.
-    $preReviewDays = if ($reviewTransition) { [Math]::Round((Get-BusinessDaysElapsed -Start $windowStart -End $reviewTransition), 2) } else { "" }
+    $preReviewDays = if ($reviewTransition) { [Math]::Round((Get-ActiveBusinessDaysElapsed -Transitions $transitions -Start $completionWindowStart -End $reviewTransition -ActiveStatuses @($InProgressStatus, $ReviewStatus) -Now ([DateTimeOffset]::UtcNow)), 2) } else { "" }
     $daysSaved = ""
     $pctSaved = ""
     $hoursSaved = ""
@@ -1028,7 +1195,15 @@ foreach ($ticketKey in $TicketList) {
     # category of doubt.
     $reviewTooEarlyToBeMeaningful = ($beforeReviewComputed -and $duringReviewComputed -and $claudeHoursBeforeReview -lt 0.1 -and $claudeHoursDuringReview -gt 1)
 
-    if ($preReviewDays -ne "" -and -not $reviewTooEarlyToBeMeaningful) {
+    # Guards on $reviewTransition existing (a clean truthy check on a
+    # DateTimeOffset), NOT on "$preReviewDays -ne ''" - a real bug found
+    # alongside GGLOBDRA-2013: when a ticket flips into review within the
+    # same minute it starts, PreReviewDays rounds to exactly 0.0, and
+    # PowerShell's "0.0 -ne ''" evaluates to $false (confirmed directly),
+    # so this branch was silently skipped for the exact near-zero case it
+    # exists to handle - the same class of coercion bug the comment above
+    # ($hoursSavedComputed) already documents and avoids for other fields.
+    if ($reviewTransition -and -not $reviewTooEarlyToBeMeaningful) {
         $completionDaysUsed = $preReviewDays
         $savedBasis = "review"
     } elseif ($actualDays -ne "" -and -not $stillOpen) {
@@ -1038,6 +1213,12 @@ foreach ($ticketKey in $TicketList) {
         } else {
             $savedBasis = "full-lifecycle (no '$ReviewStatus' transition found)"
         }
+    }
+    if ($savedBasis -and $completionWindowStart -gt $windowStart) {
+        # See .NOTES ON assignee-based completion window - $completionWindowStart
+        # was clipped forward from $windowStart because the ticket's final
+        # assignee only took ownership partway through its lifecycle.
+        $savedBasis = "$savedBasis (measured from $completionWindowStart, when the ticket's final assignee took it over - not $windowStart, the ticket's first '$InProgressStatus')"
     }
     if ($completionDaysUsed -ne "") {
         # Same basis as DaysSaved below (review-to-date if that transition
