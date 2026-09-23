@@ -374,6 +374,27 @@ $jiraPair    = "$JiraUser`:$JiraToken"
 $jiraBase64  = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes($jiraPair))
 $jiraHeaders = @{ Authorization = "Basic $jiraBase64" }
 
+# Fail fast on bad JIRA credentials. A rejected email/token pair doesn't
+# error on its own - JIRA silently falls back to anonymous access, which
+# surfaces later as a misleading "Story Points field not found" plus a 404
+# on every ticket (anonymous users can't see them). /myself is the one
+# endpoint that returns a clean 401 in that case, so check it up front.
+try {
+    $jiraMe = Invoke-RestMethod -Uri "$JiraBase/rest/api/3/myself" -Headers $jiraHeaders -Method Get
+    Write-Host "JIRA auth OK as $($jiraMe.emailAddress)`n"
+} catch {
+    $authStatus = $_.Exception.Response.StatusCode.value__
+    if ($authStatus -eq 401 -or $authStatus -eq 403) {
+        Write-Host "JIRA auth failed ($authStatus) for '$JiraUser' at $JiraBase - the email/token pair was rejected."
+        Write-Host "  - Check the token was created while logged in as '$JiraUser': https://id.atlassian.com/manage-profile/security/api-tokens"
+        Write-Host "  - Check it hasn't expired or been revoked, and is a classic token (not 'with scopes')"
+        Write-Host "  - After fixing, re-run setEnvironment.ps1 and open a NEW terminal so `$PROFILE reloads"
+    } else {
+        Write-Host "Couldn't reach JIRA at $JiraBase to verify credentials: $($_.Exception.Message)"
+    }
+    return
+}
+
 $ooPair    = "$OpenObserveUser`:$OpenObservePassword"
 $ooBase64  = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes($ooPair))
 $ooHeaders = @{ Authorization = "Basic $ooBase64"; "Content-Type" = "application/json" }
