@@ -24,7 +24,8 @@
 .PARAMETER StoryPointMappingPath
     Path to a YAML file mapping story points to an expected duration
     range in days - see story-points.yaml alongside this script for the
-    format. Defaults to .\story-points.yaml. If the file is missing, or
+    format. Defaults to story-points.yaml in this script's own folder
+    (not the current directory). If the file is missing, or
     a ticket's story point value has no entry in it, the expected-days
     comparison is simply skipped for that ticket (not an error).
 
@@ -319,7 +320,7 @@ param(
     [string]$OpenObserveUser = $env:OPENOBSERVE_USER,
     [string]$OpenObservePassword = $env:OPENOBSERVE_PASSWORD,
 
-    [string]$StoryPointMappingPath = ".\story-points.yaml",
+    [string]$StoryPointMappingPath = (Join-Path $PSScriptRoot "story-points.yaml"),
     [double]$HoursPerDay = 8,
 
     [string]$OutputCsv = ".\claude-report.csv",
