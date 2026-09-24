@@ -17,7 +17,8 @@
 
 .PARAMETER InProgressStatus / DoneStatus
     Your workflow's actual status names for "started" / "finished".
-    Defaults to "In Progress" / "Closed" - check the printed transition
+    Defaults to "In Progress" / "Closed","Development Done" (DoneStatus
+    accepts several names; any of them counts as finished) - check the printed transition
     table if these don't match your workflow and re-run with the right
     values.
 
@@ -294,7 +295,7 @@ param(
     [string]$TicketsFile,
 
     [string]$InProgressStatus = "In Progress",
-    [string]$DoneStatus = "Closed",
+    [string[]]$DoneStatus = @("Closed", "Development Done"),
     [string]$ReviewStatus = "Under Review",
 
     [string]$JiraBase = $env:JIRA_BASE,
@@ -912,7 +913,7 @@ foreach ($ticketKey in $TicketList) {
     Write-Host ""
 
     $windowStart      = ($transitions | Where-Object { $_.To -eq $InProgressStatus } | Select-Object -First 1).When
-    $doneTransition   = ($transitions | Where-Object { $_.To -eq $DoneStatus }      | Select-Object -Last 1).When
+    $doneTransition   = ($transitions | Where-Object { $DoneStatus -contains $_.To } | Select-Object -Last 1).When
 
     if (-not $windowStart) {
         $note = "No '$InProgressStatus' transition found - check status names against the table above"
@@ -931,7 +932,7 @@ foreach ($ticketKey in $TicketList) {
         $windowEnd = [DateTimeOffset]::UtcNow
         $stillOpen = $true
         $currentStatus = ($transitions | Select-Object -Last 1).To
-        Write-Host "No '$DoneStatus' transition yet - measuring elapsed time from '$InProgressStatus' through now ($windowEnd). Current status appears to be '$currentStatus' (last known transition), not necessarily '$InProgressStatus' - that name refers to the window's START point only."
+        Write-Host "No '$($DoneStatus -join "' / '")' transition yet - measuring elapsed time from '$InProgressStatus' through now ($windowEnd). Current status appears to be '$currentStatus' (last known transition), not necessarily '$InProgressStatus' - that name refers to the window's START point only."
     }
 
     # See .NOTES ON assignee-based completion window / Get-CurrentAssigneeSince.
